@@ -26,7 +26,7 @@ struct Args {
  *
  * @param argc Количество аргументов (как в main).
  * @param argv Массив аргументов (как в main).
- * @return Разобранные аргументы, либо std::nullopt, если аргументы некорректны.
+ * @return Разобранные аргументы, либо std::nullopt при ошибке использования.
  */
 std::optional<Args> parse_args(int argc, char** argv);
 
