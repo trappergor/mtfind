@@ -87,14 +87,9 @@ void test_mask_length_one() {
 }
 
 void test_empty_mask_throws() {
-    bool thrown = false;
-    try {
-        mtfind::Searcher s("");
-        (void)s;
-    } catch (const std::invalid_argument&) {
-        thrown = true;
-    }
-    test::check(thrown);
+    test::check_throws<std::invalid_argument>([] {
+        (void)mtfind::Searcher("");
+    });
 }
 
 void test_match_text() {

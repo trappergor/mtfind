@@ -32,7 +32,6 @@ void print_value(std::ostream& os, const T& v) {
 
 /**
  * @brief Проверяет условие. При провале печатает файл и строку вызова.
- * @return true, если условие истинно.
  */
 inline bool check(bool cond,
                   std::source_location loc = std::source_location::current()) {
@@ -47,7 +46,6 @@ inline bool check(bool cond,
 
 /**
  * @brief Проверяет равенство двух значений.
- * @return true, если значения равны.
  */
 template <typename A, typename B>
 bool check_eq(const A& a, const B& b,
@@ -65,9 +63,29 @@ bool check_eq(const A& a, const B& b,
 }
 
 /**
+ * @brief Проверяет, что вызов бросает исключение типа @c Exception.
+ */
+template <typename Exception, typename Fn>
+bool check_throws(Fn&& fn,
+                  std::source_location loc = std::source_location::current()) {
+    try {
+        fn();
+    } catch (const Exception&) {
+        return true;
+    } catch (...) {
+        std::cerr << loc.file_name() << ':' << loc.line()
+                  << ": wrong exception type\n";
+        ++failures();
+        return false;
+    }
+    std::cerr << loc.file_name() << ':' << loc.line()
+              << ": no exception thrown\n";
+    ++failures();
+    return false;
+}
+
+/**
  * @brief Печатает итог по набору тестов и возвращает код выхода процесса.
- * @param suite Имя набора тестов.
- * @return 0, если не было провалов, иначе 1.
  */
 inline int summary(const char* suite) {
     if (failures() == 0) {
