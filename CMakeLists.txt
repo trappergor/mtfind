@@ -13,7 +13,9 @@ add_compile_options(-Wall -Wextra -Wpedantic)
 
 add_library(mtfind_lib
     src/args.cpp
+    src/searcher.cpp
 )
+
 target_include_directories(mtfind_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 add_executable(mtfind src/main.cpp)
