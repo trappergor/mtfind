@@ -11,7 +11,13 @@ endif()
 
 add_compile_options(-Wall -Wextra -Wpedantic)
 
+add_library(mtfind_lib
+    src/args.cpp
+)
+target_include_directories(mtfind_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
 add_executable(mtfind src/main.cpp)
+target_link_libraries(mtfind PRIVATE mtfind_lib)
 
 enable_testing()
 add_subdirectory(tests)
