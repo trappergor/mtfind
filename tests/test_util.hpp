@@ -97,4 +97,12 @@ inline int summary(const char* suite) {
     return 1;
 }
 
+/**
+ * @brief Проверяет, что условие ложно.
+ */
+inline bool check_false(bool cond,
+                        std::source_location loc = std::source_location::current()) {
+    return check(!cond, loc);
+}
+
 } // namespace test
