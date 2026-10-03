@@ -9,3 +9,7 @@ add_test(NAME mask COMMAND test_mask)
 add_executable(test_searcher test_searcher.cpp)
 target_link_libraries(test_searcher PRIVATE mtfind_lib)
 add_test(NAME searcher COMMAND test_searcher)
+
+add_executable(test_file_splitter test_file_splitter.cpp)
+target_link_libraries(test_file_splitter PRIVATE mtfind_lib)
+add_test(NAME file_splitter COMMAND test_file_splitter)

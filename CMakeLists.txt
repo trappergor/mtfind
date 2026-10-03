@@ -13,6 +13,7 @@ add_compile_options(-Wall -Wextra -Wpedantic)
 
 add_library(mtfind_lib
     src/args.cpp
+    src/file_splitter.cpp
     src/mask.cpp
     src/searcher.cpp
 )
