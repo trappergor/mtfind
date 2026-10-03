@@ -13,3 +13,7 @@ add_test(NAME searcher COMMAND test_searcher)
 add_executable(test_file_splitter test_file_splitter.cpp)
 target_link_libraries(test_file_splitter PRIVATE mtfind_lib)
 add_test(NAME file_splitter COMMAND test_file_splitter)
+
+add_executable(test_worker test_worker.cpp)
+target_link_libraries(test_worker PRIVATE mtfind_lib)
+add_test(NAME worker COMMAND test_worker)

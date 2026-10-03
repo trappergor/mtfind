@@ -16,6 +16,7 @@ add_library(mtfind_lib
     src/file_splitter.cpp
     src/mask.cpp
     src/searcher.cpp
+    src/worker.cpp
 )
 
 target_include_directories(mtfind_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
