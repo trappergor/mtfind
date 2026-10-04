@@ -5,10 +5,8 @@
 
 #include "worker.hpp"
 
-#include <atomic>
 #include <fstream>
 #include <stdexcept>
-#include <unistd.h>
 #include <string>
 
 namespace mtfind {
@@ -22,30 +20,12 @@ void strip_cr(std::string& line) {
     }
 }
 
-/**
- * @brief Генерирует уникальное имя временного файла в заданной директории.
- */
-std::filesystem::path make_temp_path(const std::filesystem::path& dir) {
-    static std::atomic<std::size_t> counter{0};
-    const auto id = counter.fetch_add(1, std::memory_order_relaxed);
-    return dir / ("mtfind_part_" + std::to_string(::getpid()) + "_"
-                  + std::to_string(id) + ".tmp");
-}
-
 } // namespace
 
 WorkerResult run_worker(const std::string& filename,
                         const Range& range,
-                        const Searcher& searcher,
-                        const std::filesystem::path& temp_dir) {
+                        const Searcher& searcher) {
     WorkerResult result;
-    result.temp_path = make_temp_path(temp_dir);
-
-    std::ofstream out(result.temp_path, std::ios::binary);
-    if (!out) {
-        throw std::runtime_error("cannot create temp file: "
-                                 + result.temp_path.string());
-    }
 
     // Пустой диапазон: файл создаём, но ничего не читаем.
     if (range.end <= range.start) {
@@ -61,9 +41,9 @@ WorkerResult run_worker(const std::string& filename,
     std::size_t relative_line = 0;
     std::string line;
 
-    // Читаем строку только если её начало ещё внутри диапазона.
-    // split_file гарантирует, что вся строка целиком лежит в [start, end),
-    // поэтому после чтения мы не выйдем за границу диапазона.
+    // Читаем строки, пока не исчерпали диапазон. 
+    // split_file гарантирует, что каждая строка целиком лежит в [start, end),
+    // поэтому цикл не перескочит за границу диапазона.
     while (static_cast<std::size_t>(in.tellg()) < range.end) {
         if (!std::getline(in, line)) {
             break;
@@ -72,8 +52,10 @@ WorkerResult run_worker(const std::string& filename,
         strip_cr(line);
 
         for (const auto& m : searcher.find_all(line)) {
-            out << relative_line << ' ' << m.position << ' ' << m.text << '\n';
-            ++result.match_count;
+            // Копируем текст как есть: если вхождение начинается с пробела,
+            // он сохраняется.
+            result.matches.push_back(
+                MatchRecord{relative_line, m.position, m.text});
         }
     }
 

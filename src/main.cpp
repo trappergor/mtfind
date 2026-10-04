@@ -3,14 +3,11 @@
 #include "searcher.hpp"
 #include "worker.hpp"
 
-#include <algorithm>
 #include <cstddef>
 #include <exception>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <mutex>
-#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -20,26 +17,8 @@ namespace {
 namespace fs = std::filesystem;
 
 /**
- * @brief Внутреннее представление вхождения с глобальными координатами.
- */
-struct OutputItem {
-    std::size_t line_no = 0;  ///< Номер строки (1-based).
-    std::size_t position = 0; ///< Позиция в строке (1-based).
-    std::string text;         ///< Найденная подстрока.
-};
-
-/**
- * @brief Убирает завершающий '\r' (для файлов с CRLF).
- */
-void strip_cr(std::string& line) {
-    if (!line.empty() && line.back() == '\r') {
-        line.pop_back();
-    }
-}
-
-/**
  * @brief Сколько потоков использовать.
- *
+ *  
  * Берём hardware_concurrency, но не меньше 1.
  */
 std::size_t pick_thread_count() {
@@ -103,8 +82,7 @@ int main(int argc, char** argv) {
     const std::size_t threads = pick_thread_count();
     const auto ranges = mtfind::split_file(parsed->filename, threads);
 
-    // Каждый диапазон обрабатывается своим потоком. Результаты пишутся
-    // в отдельные временные файлы, чтобы избежать синхронизации при выводе.
+    // Каждый диапазон обрабатывается своим потоком.
     std::vector<mtfind::WorkerResult> results(ranges.size());
     std::vector<std::thread> pool;
     pool.reserve(ranges.size());
@@ -116,8 +94,7 @@ int main(int argc, char** argv) {
         pool.emplace_back([&, i] {
             try {
                 results[i] = mtfind::run_worker(
-                    parsed->filename, ranges[i], searcher,
-                    fs::temp_directory_path());
+                    parsed->filename, ranges[i], searcher);
             } catch (...) {
                 std::lock_guard<std::mutex> lk(err_mutex);
                 if (!first_error) first_error = std::current_exception();
@@ -133,47 +110,26 @@ int main(int argc, char** argv) {
         std::rethrow_exception(first_error);
     }
 
-    // Префиксная сумма обработанных строк: базовый номер строки для
-    // диапазона i — сумма line_count всех предыдущих диапазонов.
-    std::vector<std::size_t> base_line(ranges.size(), 0);
-    std::size_t total_matches = 0;
-    for (std::size_t i = 0; i < results.size(); ++i) {
-        if (i > 0) {
-            base_line[i] = base_line[i - 1] + results[i - 1].line_count;
-        }
-        total_matches += results[i].match_count;
+    // Считаем общее количество вхождений до вывода — формат требует
+    // напечатать его первой строкой.
+    std::size_t total = 0;
+    for (const auto& r : results) {
+        total += r.matches.size();
     }
+    std::cout << total << '\n';
 
-    std::cout << total_matches << '\n';
-
-    // Слияние: диапазоны в порядке файла, строки внутри диапазона тоже
-    // в порядке файла (воркер пишет их последовательно). Глобальный
-    // номер строки = base_line + relative_line.
-    for (std::size_t i = 0; i < results.size(); ++i) {
-        const auto& res = results[i];
-        std::ifstream in(res.temp_path);
-        std::string line;
-        while (std::getline(in, line)) {
-            // Формат строки: "<relative_line> <position> <text>".
-            std::istringstream iss(line);
-            std::size_t rel = 0;
-            std::size_t pos = 0;
-            iss >> rel >> pos;
-            // Всё, что после второго пробела — текст вхождения.
-            std::string text;
-            std::getline(iss, text);
-            if (!text.empty() && text.front() == ' ') {
-                text.erase(text.begin());
-            }
-            const std::size_t global_line = base_line[i] + rel;
-            std::cout << global_line << ' ' << (pos + 1) << ' ' << text << '\n';
+    // Слияние в порядке диапазонов. Внутри диапазона вхождения уже идут
+    // в порядке строк и позиций (воркер обрабатывает строки последовательно).
+    // Глобальный номер строки = сумма line_count предыдущих диапазонов
+    // плюс относительный номер.
+    std::size_t base_line = 0;
+    for (const auto& r : results) {
+        for (const auto& m : r.matches) {
+            std::cout << (base_line + m.line) << ' '
+                      << (m.position + 1) << ' '
+                      << m.text << '\n';
         }
-    }
-
-    // Уборка временных файлов.
-    for (const auto& res : results) {
-        std::error_code ec;
-        fs::remove(res.temp_path, ec);
+        base_line += r.line_count;
     }
 
     return 0;

@@ -11,8 +11,6 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
-#include <unistd.h>
-#include <vector>
 
 namespace {
 
@@ -24,8 +22,7 @@ public:
     explicit TempFile(const std::string& content) {
         static std::size_t counter = 0;
         path_ = fs::temp_directory_path()
-              / ("mtfind_worker_in_" + std::to_string(::getpid()) + "_"
-                 + std::to_string(counter++) + ".txt");
+              / ("mtfind_worker_in_" + std::to_string(counter++) + ".txt");
         std::ofstream out(path_, std::ios::binary);
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
     }
@@ -40,84 +37,104 @@ private:
     fs::path path_;
 };
 
-/// Читает все строки из указанного файла.
-std::vector<std::string> read_lines(const fs::path& p) {
-    std::vector<std::string> lines;
-    std::ifstream in(p);
-    std::string line;
-    while (std::getline(in, line)) lines.push_back(line);
-    return lines;
-}
-
-void test_full_range_two_hits() {
-    // Диапазон покрывает весь файл. Ищем "?ad" в "bad mad had".
+void test_full_range_three_hits() {
     TempFile f("bad mad had\n");
     mtfind::Searcher s("?ad");
     auto res = mtfind::run_worker(f.path().string(),
                                   mtfind::Range{0, 12},
-                                  s,
-                                  fs::temp_directory_path());
+                                  s);
 
     test::check_eq(res.line_count, std::size_t(1));
-    test::check_eq(res.match_count, std::size_t(3));
-
-    auto lines = read_lines(res.temp_path);
-    test::check_eq(lines.size(), std::size_t(3));
-    if (lines.size() == 3) {
-        test::check_eq(lines[0], std::string("1 0 bad"));
-        test::check_eq(lines[1], std::string("1 4 mad"));
-        test::check_eq(lines[2], std::string("1 8 had"));
+    test::check_eq(res.matches.size(), std::size_t(3));
+    if (res.matches.size() == 3) {
+        test::check_eq(res.matches[0].line, std::size_t(1));
+        test::check_eq(res.matches[0].position, std::size_t(0));
+        test::check_eq(res.matches[0].text, std::string("bad"));
+        test::check_eq(res.matches[1].position, std::size_t(4));
+        test::check_eq(res.matches[1].text, std::string("mad"));
+        test::check_eq(res.matches[2].position, std::size_t(8));
+        test::check_eq(res.matches[2].text, std::string("had"));
     }
-
-    std::error_code ec;
-    fs::remove(res.temp_path, ec);
 }
 
-void test_partial_range_line_numbers_are_relative() {
-    // Файл: "aaaa\nbbb\nccc\n". Диапазон от начала второй строки до конца.
-    // Строки 2 и 3 (в нумерации файла) внутри диапазона имеют
-    // relative_line 1 и 2.
-    const std::string content = "aaaa\nbbb\nccc\n";
-    TempFile f(content);
-    mtfind::Searcher s("bbb");
+void test_relative_line_numbers() {
+    // Файл: "aaaa\nbbb\nccc\n" (13 байт). Границы строк:
+    //   [0, 5)   -> "aaaa\n"
+    //   [5, 9)   -> "bbb\n"
+    //   [9, 13)  -> "ccc\n"
+    //
+    // Проверяем, что воркер считает relative_line от начала диапазона,
+    // а не от начала файла. Диапазоны задаём явно, чтобы не зависеть
+    // от того, куда именно split_file() положит границу.
+    TempFile f("aaaa\nbbb\nccc\n");
 
-    auto rs = mtfind::split_file(f.path().string(), 3);
-    test::check(!rs.empty());
-
-    // Возьмём последний диапазон — он точно начинается после '\n'.
-    const auto& r = rs.back();
-    auto res = mtfind::run_worker(f.path().string(), r, s,
-                                  fs::temp_directory_path());
-
-    // Внутри последнего диапазона: 'bbb', 'ccc' (и, возможно, только 'ccc' —
-    // зависит от того, куда попала граница). Но relative_line всегда 1-based.
-    test::check(res.line_count >= 1);
-
-    auto lines = read_lines(res.temp_path);
-    for (const auto& l : lines) {
-        // Проверяем формат "<line> <pos> <text>".
-        auto first = l.find(' ');
-        test::check_false(first == std::string::npos);
-        test::check_eq(l.substr(0, first), std::string("1"));
+    {
+        mtfind::Searcher s("bbb");
+        auto res = mtfind::run_worker(f.path().string(),
+                                      mtfind::Range{5, 9},
+                                      s);
+        test::check_eq(res.line_count, std::size_t(1));
+        test::check_eq(res.matches.size(), std::size_t(1));
+        if (!res.matches.empty()) {
+            test::check_eq(res.matches[0].line, std::size_t(1));
+            test::check_eq(res.matches[0].position, std::size_t(0));
+            test::check_eq(res.matches[0].text, std::string("bbb"));
+        }
     }
 
-    std::error_code ec;
-    fs::remove(res.temp_path, ec);
+    {
+        mtfind::Searcher s("ccc");
+        auto res = mtfind::run_worker(f.path().string(),
+                                      mtfind::Range{9, 13},
+                                      s);
+        test::check_eq(res.line_count, std::size_t(1));
+        test::check_eq(res.matches.size(), std::size_t(1));
+        if (!res.matches.empty()) {
+            test::check_eq(res.matches[0].line, std::size_t(1));
+            test::check_eq(res.matches[0].position, std::size_t(0));
+            test::check_eq(res.matches[0].text, std::string("ccc"));
+        }
+    }
+}
+
+void test_leading_space_is_preserved() {
+    // Маска "?a" должна найти " a" в строке "xx a".
+    // Вхождение начинается с пробела — он должен сохраниться в m.text.
+    TempFile f("xx a\n");
+    mtfind::Searcher s("?a");
+    auto res = mtfind::run_worker(f.path().string(),
+                                  mtfind::Range{0, 5},
+                                  s);
+    test::check_eq(res.matches.size(), std::size_t(1));
+    if (!res.matches.empty()) {
+        test::check_eq(res.matches[0].position, std::size_t(2));
+        test::check_eq(res.matches[0].text, std::string(" a"));
+    }
+}
+
+void test_leading_space_preserved_exact() {
+    // Точная маска " ab" в "xx aby" — вхождение с ведущим пробелом.
+    TempFile f("xx aby\n");
+    mtfind::Searcher s(" ab");
+    auto res = mtfind::run_worker(f.path().string(),
+                                  mtfind::Range{0, 7},
+                                  s);
+    test::check_eq(res.matches.size(), std::size_t(1));
+    if (!res.matches.empty()) {
+        test::check_eq(res.matches[0].position, std::size_t(2));
+        test::check_eq(res.matches[0].text, std::string(" ab"));
+    }
 }
 
 void test_empty_range() {
     TempFile f("abc\n");
     mtfind::Searcher s("abc");
 
-    mtfind::Range empty{5, 5};
-    auto res = mtfind::run_worker(f.path().string(), empty, s,
-                                  fs::temp_directory_path());
-
+    auto res = mtfind::run_worker(f.path().string(),
+                                  mtfind::Range{5, 5},
+                                  s);
     test::check_eq(res.line_count, std::size_t(0));
-    test::check_eq(res.match_count, std::size_t(0));
-
-    std::error_code ec;
-    fs::remove(res.temp_path, ec);
+    test::check(res.matches.empty());
 }
 
 void test_no_matches() {
@@ -125,14 +142,9 @@ void test_no_matches() {
     mtfind::Searcher s("?ad");
     auto res = mtfind::run_worker(f.path().string(),
                                   mtfind::Range{0, 12},
-                                  s,
-                                  fs::temp_directory_path());
-
+                                  s);
     test::check_eq(res.line_count, std::size_t(1));
-    test::check_eq(res.match_count, std::size_t(0));
-
-    std::error_code ec;
-    fs::remove(res.temp_path, ec);
+    test::check(res.matches.empty());
 }
 
 void test_missing_input_file_throws() {
@@ -140,16 +152,17 @@ void test_missing_input_file_throws() {
     test::check_throws<std::runtime_error>([] {
         (void)mtfind::run_worker("/nonexistent/xyz.txt",
                                  mtfind::Range{0, 10},
-                                 mtfind::Searcher("abc"),
-                                 fs::temp_directory_path());
+                                 mtfind::Searcher("abc"));
     });
 }
 
 } // namespace
 
 int main() {
-    test_full_range_two_hits();
-    test_partial_range_line_numbers_are_relative();
+    test_full_range_three_hits();
+    test_relative_line_numbers();
+    test_leading_space_is_preserved();
+    test_leading_space_preserved_exact();
     test_empty_range();
     test_no_matches();
     test_missing_input_file_throws();
