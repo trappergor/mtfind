@@ -176,12 +176,16 @@ std::vector<Match> Searcher::find_all_with_anchor(const std::string& line) const
 
 bool Searcher::verify_at(const std::string& line,
                          std::size_t candidate) const noexcept {
-    // candidate + m <= line.size() гарантировано вызывающим кодом,
-    // поэтому проверки границ здесь не нужны.
-    for (const auto& seg : compiled_.segments) {
+    // candidate + m <= line.size() гарантировано вызывающим кодом.
+    // Якорный сегмент пропускаем: BMH его уже подтвердил в этой позиции.
+    for (std::size_t k = 0; k < compiled_.segments.size(); ++k) {
+        if (k == compiled_.anchor_index) {
+            continue;
+        }
+        const auto& seg = compiled_.segments[k];
         const std::size_t at = candidate + seg.offset;
-        for (std::size_t k = 0; k < seg.text.size(); ++k) {
-            if (line[at + k] != seg.text[k]) {
+        for (std::size_t i = 0; i < seg.text.size(); ++i) {
+            if (line[at + i] != seg.text[i]) {
                 return false;
             }
         }
