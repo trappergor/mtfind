@@ -247,6 +247,54 @@ void test_spec_example_line7() {
     }
 }
 
+void test_wildcard_leading_space() {
+    // "?a" на "xx a": вхождение " a" начинается с пробела.
+    mtfind::Searcher s("?a");
+    auto m = s.find_all("xx a");
+    test::check_eq(m.size(), std::size_t(1));
+    if (!m.empty()) {
+        test::check_eq(m[0].position, std::size_t(2));
+        test::check_eq(m[0].text, std::string(" a"));
+    }
+}
+
+void test_exact_with_spaces() {
+    // Точная маска " ab" на "xx aby".
+    mtfind::Searcher s(" ab");
+    auto m = s.find_all("xx aby");
+    test::check_eq(m.size(), std::size_t(1));
+    if (!m.empty()) {
+        test::check_eq(m[0].position, std::size_t(2));
+        test::check_eq(m[0].text, std::string(" ab"));
+    }
+}
+
+void test_anchor_not_first_segment() {
+    // "?a?bc": сегменты "a"@1 и "bc"@3. Якорь — "bc" (индекс 1).
+    mtfind::Searcher s("?a?bc");
+    auto m = s.find_all("xaybc z");
+    test::check_eq(m.size(), std::size_t(1));
+    if (!m.empty()) {
+        test::check_eq(m[0].position, std::size_t(0));
+        test::check_eq(m[0].text, std::string("xaybc"));
+    }
+
+    // Негативный кейс: якорь совпал, а первый сегмент нет.
+    auto m2 = s.find_all("xzybc z");
+    test::check(m2.empty());
+}
+
+void test_all_wildcards_are_greedy_left_to_right() {
+    // "??" на "abcde": жадное слева направо, 2 вхождения.
+    mtfind::Searcher s("??");
+    auto m = s.find_all("abcde");
+    test::check_eq(m.size(), std::size_t(2));
+    if (m.size() == 2) {
+        test::check_eq(m[0].text, std::string("ab"));
+        test::check_eq(m[1].text, std::string("cd"));
+    }
+}
+
 } // namespace
 
 int main() {
@@ -272,6 +320,11 @@ int main() {
     test_spec_example_line5();
     test_spec_example_line6();
     test_spec_example_line7();
+
+    test_wildcard_leading_space();
+    test_exact_with_spaces();
+    test_anchor_not_first_segment();
+    test_all_wildcards_are_greedy_left_to_right();
 
     return test::summary("test_searcher");
 }
