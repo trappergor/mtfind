@@ -13,6 +13,9 @@ CompiledMask compile_mask(const std::string& mask) {
     if (mask.empty()) {
         throw std::invalid_argument("mask must not be empty");
     }
+    if (mask.find('\n') != std::string::npos) {
+        throw std::invalid_argument("mask must not contain '\\n'");
+    }
 
     CompiledMask c;
     c.mask = mask;

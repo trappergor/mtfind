@@ -83,6 +83,35 @@ void test_empty_throws() {
     });
 }
 
+void test_newline_in_mask_throws() {
+    test::check_throws<std::invalid_argument>([] {
+        (void)mtfind::compile_mask("a\nb");
+    });
+    test::check_throws<std::invalid_argument>([] {
+        (void)mtfind::compile_mask("\n");
+    });
+}
+
+void test_long_mask_single_segment() {
+    // 100 000 одинаковых символов 'a' — один сегмент.
+    const std::string mask(100'000, 'a');
+    auto c = mtfind::compile_mask(mask);
+    test::check_eq(c.length, std::size_t(100'000));
+    test::check_eq(c.segments.size(), std::size_t(1));
+    if (!c.segments.empty()) {
+        test::check_eq(c.segments[0].offset, std::size_t(0));
+        test::check_eq(c.segments[0].text.size(), std::size_t(100'000));
+    }
+    test::check_eq(c.anchor_index, std::size_t(0));
+}
+
+void test_long_mask_all_wildcards() {
+    const std::string mask(100'000, '?');
+    auto c = mtfind::compile_mask(mask);
+    test::check(c.segments.empty());
+    test::check_eq(c.anchor_index, mtfind::no_anchor);
+}
+
 } // namespace
 
 int main() {
@@ -93,5 +122,8 @@ int main() {
     test_longest_wins();
     test_multiple_wildcards();
     test_empty_throws();
+    test_newline_in_mask_throws();
+    test_long_mask_single_segment();
+    test_long_mask_all_wildcards();
     return test::summary("test_mask");
 }

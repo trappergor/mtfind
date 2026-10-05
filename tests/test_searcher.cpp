@@ -295,6 +295,28 @@ void test_all_wildcards_are_greedy_left_to_right() {
     }
 }
 
+void test_long_mask_all_wildcards_search() {
+    // Маска из 100 000 '?': 200 000-символьная строка даёт 2 вхождения.
+    const std::string mask(100'000, '?');
+    mtfind::Searcher s(mask);
+    const std::string line(200'000, 'x');
+    auto ms = s.find_all(line);
+    test::check_eq(ms.size(), std::size_t(2));
+    if (ms.size() == 2) {
+        test::check_eq(ms[0].position, std::size_t(0));
+        test::check_eq(ms[0].text.size(), std::size_t(100'000));
+        test::check_eq(ms[1].position, std::size_t(100'000));
+    }
+}
+
+void test_long_mask_longer_than_line() {
+    // Маска длиннее строки — вхождений нет.
+    const std::string mask = std::string(99'999, 'a') + "b";
+    mtfind::Searcher s(mask);
+    auto ms = s.find_all("short line");
+    test::check(ms.empty());
+}
+
 } // namespace
 
 int main() {
@@ -325,6 +347,8 @@ int main() {
     test_exact_with_spaces();
     test_anchor_not_first_segment();
     test_all_wildcards_are_greedy_left_to_right();
+    test_long_mask_all_wildcards_search();
+    test_long_mask_longer_than_line();
 
     return test::summary("test_searcher");
 }

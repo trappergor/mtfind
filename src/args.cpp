@@ -26,6 +26,11 @@ std::optional<Args> parse_args(int argc, char** argv) {
         return std::nullopt;
     }
 
+    // Маска не может содержать перевод строки.
+    if (args.mask.find('\n') != std::string::npos) {
+        return std::nullopt;
+    }
+
     return args;
 }
 

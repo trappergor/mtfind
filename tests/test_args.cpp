@@ -45,6 +45,12 @@ void test_empty() {
     test::check(!call({"mtfind", "input.txt", ""}).has_value());
 }
 
+void test_mask_with_newline_rejected() {
+    test::check(!call({"mtfind", "input.txt", "a\nb"}).has_value());
+    test::check(!call({"mtfind", "input.txt", "\n"}).has_value());
+    test::check(call({"mtfind", "input.txt", "a\rb"}).has_value());
+}
+
 } // namespace
 
 int main() {
@@ -52,5 +58,6 @@ int main() {
     test_missing_args();
     test_extra_args();
     test_empty();
+    test_mask_with_newline_rejected();
     return test::summary("test_args");
 }

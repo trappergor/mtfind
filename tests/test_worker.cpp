@@ -209,6 +209,74 @@ void test_missing_input_file_throws() {
     });
 }
 
+void test_crlf_stripped() {
+    // CRLF-строка: воркер должен снять '\r' перед поиском.
+    TempFile f("abc\r\nxyz bad\r\nzzz\r\n");
+    mtfind::Searcher s("?ad");
+    auto res = mtfind::run_worker(f.path().string(),
+                                  mtfind::Range{0, 17},
+                                  s,
+                                  fs::temp_directory_path());
+    test::check_eq(res.line_count, std::size_t(3));
+    test::check_eq(res.match_count, std::size_t(1));
+    auto ms = read_matches(res.temp_path);
+    if (!ms.empty()) {
+        test::check_eq(ms[0].line, std::uint64_t(2));
+        test::check_eq(ms[0].position, std::uint64_t(4));
+        test::check_eq(ms[0].text, std::string("bad"));
+    }
+    std::error_code ec;
+    fs::remove(res.temp_path, ec);
+}
+
+void test_empty_lines_are_counted() {
+    // "a\n\nb\n": три строки, во второй пусто.
+    TempFile f("a\n\nb\n");
+    mtfind::Searcher s("?");
+    auto res = mtfind::run_worker(f.path().string(),
+                                  mtfind::Range{0, 5},
+                                  s,
+                                  fs::temp_directory_path());
+    test::check_eq(res.line_count, std::size_t(3));
+    test::check_eq(res.match_count, std::size_t(2));
+    auto ms = read_matches(res.temp_path);
+    if (ms.size() == 2) {
+        test::check_eq(ms[0].line, std::uint64_t(1));
+        test::check_eq(ms[0].text, std::string("a"));
+        test::check_eq(ms[1].line, std::uint64_t(3));
+        test::check_eq(ms[1].text, std::string("b"));
+    }
+    std::error_code ec;
+    fs::remove(res.temp_path, ec);
+}
+
+void test_only_newlines_file() {
+    // Файл из одних '\n'. Три строки, вхождений нет.
+    TempFile f("\n\n\n");
+    mtfind::Searcher s("a");
+    auto res = mtfind::run_worker(f.path().string(),
+                                  mtfind::Range{0, 3},
+                                  s,
+                                  fs::temp_directory_path());
+    test::check_eq(res.line_count, std::size_t(3));
+    test::check_eq(res.match_count, std::size_t(0));
+    std::error_code ec;
+    fs::remove(res.temp_path, ec);
+}
+
+void test_blank_file() {
+    TempFile f("");
+    mtfind::Searcher s("a");
+    auto res = mtfind::run_worker(f.path().string(),
+                                  mtfind::Range{0, 0},
+                                  s,
+                                  fs::temp_directory_path());
+    test::check_eq(res.line_count, std::size_t(0));
+    test::check_eq(res.match_count, std::size_t(0));
+    std::error_code ec;
+    fs::remove(res.temp_path, ec);
+}
+
 } // namespace
 
 int main() {
@@ -218,5 +286,9 @@ int main() {
     test_empty_range();
     test_no_matches();
     test_missing_input_file_throws();
+    test_crlf_stripped();
+    test_empty_lines_are_counted();
+    test_only_newlines_file();
+    test_blank_file();
     return test::summary("test_worker");
 }
