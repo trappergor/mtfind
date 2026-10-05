@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -18,7 +19,24 @@ namespace {
 
 namespace fs = std::filesystem;
 
+/**
+ * @brief Сколько потоков использовать.
+ *
+ * Если установлена переменная окружения MTFIND_THREADS и её значение —
+ * целое число >= 1, используем её. Иначе — hardware_concurrency().
+ * Переменная нужна для интеграционных тестов.
+ */
 std::size_t pick_thread_count() {
+    if (const char* env = std::getenv("MTFIND_THREADS")) {
+        try {
+            const unsigned long v = std::stoul(env);
+            if (v >= 1) {
+                return static_cast<std::size_t>(v);
+            }
+        } catch (...) {
+            // Игнорируем некорректное значение, используем дефолт.
+        }
+    }
     const auto n = std::thread::hardware_concurrency();
     return n == 0 ? 1 : static_cast<std::size_t>(n);
 }
