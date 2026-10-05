@@ -1,18 +1,17 @@
 /**
  * @file test_file_splitter.cpp
  * @brief Юнит-тесты для split_file().
- *
- * Тесты работают с временными файлами в temp-директории.
  */
 
 #include "file_splitter.hpp"
 #include "test_util.hpp"
 
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <string>
-#include <unistd.h>
 #include <vector>
 
 namespace {
@@ -26,10 +25,13 @@ namespace fs = std::filesystem;
 class TempFile {
 public:
     explicit TempFile(const std::string& content) {
-        static std::size_t counter = 0;
+        static std::atomic<std::size_t> counter{0};
+        const auto id = counter.fetch_add(1);
+        const auto ts = std::chrono::steady_clock::now()
+                            .time_since_epoch().count();
         path_ = fs::temp_directory_path()
-              / ("mtfind_test_" + std::to_string(::getpid()) + "_"
-                 + std::to_string(counter++) + ".txt");
+              / ("mtfind_test_" + std::to_string(ts) + "_"
+                 + std::to_string(id) + ".txt");
         std::ofstream out(path_, std::ios::binary);
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
     }

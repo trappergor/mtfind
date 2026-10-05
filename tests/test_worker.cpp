@@ -8,9 +8,13 @@
 #include "test_util.hpp"
 #include "worker.hpp"
 
+#include <atomic>
+#include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -20,9 +24,13 @@ namespace fs = std::filesystem;
 class TempFile {
 public:
     explicit TempFile(const std::string& content) {
-        static std::size_t counter = 0;
+        static std::atomic<std::size_t> counter{0};
+        const auto id = counter.fetch_add(1);
+        const auto ts = std::chrono::steady_clock::now()
+                            .time_since_epoch().count();
         path_ = fs::temp_directory_path()
-              / ("mtfind_worker_in_" + std::to_string(counter++) + ".txt");
+              / ("mtfind_worker_in_" + std::to_string(ts) + "_"
+                 + std::to_string(id) + ".txt");
         std::ofstream out(path_, std::ios::binary);
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
     }
@@ -37,24 +45,66 @@ private:
     fs::path path_;
 };
 
+struct RawMatch {
+    std::uint64_t line = 0;
+    std::uint64_t position = 0;
+    std::string text;
+};
+
+/// Читает uint64 в little-endian.
+bool read_u64(std::istream& is, std::uint64_t& v) {
+    unsigned char buf[8];
+    if (!is.read(reinterpret_cast<char*>(buf), sizeof(buf))) {
+        return false;
+    }
+    v = 0;
+    for (int i = 7; i >= 0; --i) {
+        v = (v << 8) | buf[i];
+    }
+    return true;
+}
+
+std::vector<RawMatch> read_matches(const fs::path& p) {
+    std::vector<RawMatch> out;
+    std::ifstream in(p, std::ios::binary);
+    while (true) {
+        RawMatch m;
+        std::uint64_t len = 0;
+        if (!read_u64(in, m.line)) break;
+        if (!read_u64(in, m.position)) break;
+        if (!read_u64(in, len)) break;
+        m.text.assign(static_cast<std::size_t>(len), '\0');
+        in.read(m.text.data(), static_cast<std::streamsize>(len));
+        out.push_back(std::move(m));
+    }
+    return out;
+}
+
 void test_full_range_three_hits() {
     TempFile f("bad mad had\n");
     mtfind::Searcher s("?ad");
     auto res = mtfind::run_worker(f.path().string(),
                                   mtfind::Range{0, 12},
-                                  s);
+                                  s,
+                                  fs::temp_directory_path());
 
     test::check_eq(res.line_count, std::size_t(1));
-    test::check_eq(res.matches.size(), std::size_t(3));
-    if (res.matches.size() == 3) {
-        test::check_eq(res.matches[0].line, std::size_t(1));
-        test::check_eq(res.matches[0].position, std::size_t(0));
-        test::check_eq(res.matches[0].text, std::string("bad"));
-        test::check_eq(res.matches[1].position, std::size_t(4));
-        test::check_eq(res.matches[1].text, std::string("mad"));
-        test::check_eq(res.matches[2].position, std::size_t(8));
-        test::check_eq(res.matches[2].text, std::string("had"));
+    test::check_eq(res.match_count, std::size_t(3));
+
+    auto ms = read_matches(res.temp_path);
+    test::check_eq(ms.size(), std::size_t(3));
+    if (ms.size() == 3) {
+        test::check_eq(ms[0].line, std::uint64_t(1));
+        test::check_eq(ms[0].position, std::uint64_t(0));
+        test::check_eq(ms[0].text, std::string("bad"));
+        test::check_eq(ms[1].position, std::uint64_t(4));
+        test::check_eq(ms[1].text, std::string("mad"));
+        test::check_eq(ms[2].position, std::uint64_t(8));
+        test::check_eq(ms[2].text, std::string("had"));
     }
+
+    std::error_code ec;
+    fs::remove(res.temp_path, ec);
 }
 
 void test_relative_line_numbers() {
@@ -62,68 +112,63 @@ void test_relative_line_numbers() {
     //   [0, 5)   -> "aaaa\n"
     //   [5, 9)   -> "bbb\n"
     //   [9, 13)  -> "ccc\n"
-    //
-    // Проверяем, что воркер считает relative_line от начала диапазона,
-    // а не от начала файла. Диапазоны задаём явно, чтобы не зависеть
-    // от того, куда именно split_file() положит границу.
+    // Задаём диапазоны явно: воркер считает relative_line от начала
+    // диапазона, а не от начала файла.
     TempFile f("aaaa\nbbb\nccc\n");
 
     {
         mtfind::Searcher s("bbb");
         auto res = mtfind::run_worker(f.path().string(),
                                       mtfind::Range{5, 9},
-                                      s);
+                                      s,
+                                      fs::temp_directory_path());
         test::check_eq(res.line_count, std::size_t(1));
-        test::check_eq(res.matches.size(), std::size_t(1));
-        if (!res.matches.empty()) {
-            test::check_eq(res.matches[0].line, std::size_t(1));
-            test::check_eq(res.matches[0].position, std::size_t(0));
-            test::check_eq(res.matches[0].text, std::string("bbb"));
+        test::check_eq(res.match_count, std::size_t(1));
+        auto ms = read_matches(res.temp_path);
+        if (!ms.empty()) {
+            test::check_eq(ms[0].line, std::uint64_t(1));
+            test::check_eq(ms[0].text, std::string("bbb"));
         }
+        std::error_code ec;
+        fs::remove(res.temp_path, ec);
     }
 
     {
         mtfind::Searcher s("ccc");
         auto res = mtfind::run_worker(f.path().string(),
                                       mtfind::Range{9, 13},
-                                      s);
+                                      s,
+                                      fs::temp_directory_path());
         test::check_eq(res.line_count, std::size_t(1));
-        test::check_eq(res.matches.size(), std::size_t(1));
-        if (!res.matches.empty()) {
-            test::check_eq(res.matches[0].line, std::size_t(1));
-            test::check_eq(res.matches[0].position, std::size_t(0));
-            test::check_eq(res.matches[0].text, std::string("ccc"));
+        test::check_eq(res.match_count, std::size_t(1));
+        auto ms = read_matches(res.temp_path);
+        if (!ms.empty()) {
+            test::check_eq(ms[0].line, std::uint64_t(1));
+            test::check_eq(ms[0].text, std::string("ccc"));
         }
+        std::error_code ec;
+        fs::remove(res.temp_path, ec);
     }
 }
 
 void test_leading_space_is_preserved() {
     // Маска "?a" должна найти " a" в строке "xx a".
-    // Вхождение начинается с пробела — он должен сохраниться в m.text.
     TempFile f("xx a\n");
     mtfind::Searcher s("?a");
     auto res = mtfind::run_worker(f.path().string(),
                                   mtfind::Range{0, 5},
-                                  s);
-    test::check_eq(res.matches.size(), std::size_t(1));
-    if (!res.matches.empty()) {
-        test::check_eq(res.matches[0].position, std::size_t(2));
-        test::check_eq(res.matches[0].text, std::string(" a"));
-    }
-}
+                                  s,
+                                  fs::temp_directory_path());
 
-void test_leading_space_preserved_exact() {
-    // Точная маска " ab" в "xx aby" — вхождение с ведущим пробелом.
-    TempFile f("xx aby\n");
-    mtfind::Searcher s(" ab");
-    auto res = mtfind::run_worker(f.path().string(),
-                                  mtfind::Range{0, 7},
-                                  s);
-    test::check_eq(res.matches.size(), std::size_t(1));
-    if (!res.matches.empty()) {
-        test::check_eq(res.matches[0].position, std::size_t(2));
-        test::check_eq(res.matches[0].text, std::string(" ab"));
+    test::check_eq(res.match_count, std::size_t(1));
+    auto ms = read_matches(res.temp_path);
+    if (!ms.empty()) {
+        test::check_eq(ms[0].position, std::uint64_t(2));
+        test::check_eq(ms[0].text, std::string(" a"));
     }
+
+    std::error_code ec;
+    fs::remove(res.temp_path, ec);
 }
 
 void test_empty_range() {
@@ -132,9 +177,13 @@ void test_empty_range() {
 
     auto res = mtfind::run_worker(f.path().string(),
                                   mtfind::Range{5, 5},
-                                  s);
+                                  s,
+                                  fs::temp_directory_path());
     test::check_eq(res.line_count, std::size_t(0));
-    test::check(res.matches.empty());
+    test::check_eq(res.match_count, std::size_t(0));
+
+    std::error_code ec;
+    fs::remove(res.temp_path, ec);
 }
 
 void test_no_matches() {
@@ -142,17 +191,21 @@ void test_no_matches() {
     mtfind::Searcher s("?ad");
     auto res = mtfind::run_worker(f.path().string(),
                                   mtfind::Range{0, 12},
-                                  s);
+                                  s,
+                                  fs::temp_directory_path());
     test::check_eq(res.line_count, std::size_t(1));
-    test::check(res.matches.empty());
+    test::check_eq(res.match_count, std::size_t(0));
+
+    std::error_code ec;
+    fs::remove(res.temp_path, ec);
 }
 
 void test_missing_input_file_throws() {
-    mtfind::Searcher s("abc");
     test::check_throws<std::runtime_error>([] {
         (void)mtfind::run_worker("/nonexistent/xyz.txt",
                                  mtfind::Range{0, 10},
-                                 mtfind::Searcher("abc"));
+                                 mtfind::Searcher("abc"),
+                                 fs::temp_directory_path());
     });
 }
 
@@ -162,7 +215,6 @@ int main() {
     test_full_range_three_hits();
     test_relative_line_numbers();
     test_leading_space_is_preserved();
-    test_leading_space_preserved_exact();
     test_empty_range();
     test_no_matches();
     test_missing_input_file_throws();

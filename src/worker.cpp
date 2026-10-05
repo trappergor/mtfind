@@ -5,6 +5,8 @@
 
 #include "worker.hpp"
 
+#include <atomic>
+#include <chrono>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -20,16 +22,49 @@ void strip_cr(std::string& line) {
     }
 }
 
+/**
+ * @brief Записывает uint64 в little-endian.
+ *
+ * Порядок байт фиксируем вручную, чтобы формат не зависел от архитектуры.
+ */
+void write_u64(std::ostream& os, std::uint64_t v) {
+    char buf[8];
+    for (int i = 0; i < 8; ++i) {
+        buf[i] = static_cast<char>(v & 0xFFu);
+        v >>= 8;
+    }
+    os.write(buf, sizeof(buf));
+}
+
 } // namespace
+
+std::filesystem::path make_temp_path(const std::filesystem::path& dir) {
+    static std::atomic<std::size_t> counter{0};
+    const auto id = counter.fetch_add(1, std::memory_order_relaxed);
+    const auto ts = std::chrono::steady_clock::now()
+                        .time_since_epoch()
+                        .count();
+    return dir / ("mtfind_part_" + std::to_string(ts) + "_"
+                  + std::to_string(id) + ".bin");
+}
 
 WorkerResult run_worker(const std::string& filename,
                         const Range& range,
-                        const Searcher& searcher) {
+                        const Searcher& searcher,
+                        const std::filesystem::path& temp_dir) {
     WorkerResult result;
+    result.temp_path = make_temp_path(temp_dir);
 
-    // Пустой диапазон: файл создаём, но ничего не читаем.
+    // Пустой диапазон: файл создаём (для единообразия), но ничего не пишем.
     if (range.end <= range.start) {
+        std::ofstream{result.temp_path, std::ios::binary};
         return result;
+    }
+
+    std::ofstream out(result.temp_path, std::ios::binary);
+    if (!out) {
+        throw std::runtime_error("cannot create temp file: "
+                                 + result.temp_path.string());
     }
 
     std::ifstream in(filename, std::ios::binary);
@@ -41,9 +76,8 @@ WorkerResult run_worker(const std::string& filename,
     std::size_t relative_line = 0;
     std::string line;
 
-    // Читаем строки, пока не исчерпали диапазон. 
-    // split_file гарантирует, что каждая строка целиком лежит в [start, end),
-    // поэтому цикл не перескочит за границу диапазона.
+    // split_file гарантирует, что вся строка целиком лежит в [start, end),
+    // поэтому цикл не перескакивает границу диапазона.
     while (static_cast<std::size_t>(in.tellg()) < range.end) {
         if (!std::getline(in, line)) {
             break;
@@ -52,10 +86,13 @@ WorkerResult run_worker(const std::string& filename,
         strip_cr(line);
 
         for (const auto& m : searcher.find_all(line)) {
-            // Копируем текст как есть: если вхождение начинается с пробела,
-            // он сохраняется.
-            result.matches.push_back(
-                MatchRecord{relative_line, m.position, m.text});
+            // Формат: <line><position><length><bytes>
+            write_u64(out, relative_line);
+            write_u64(out, m.position);
+            write_u64(out, m.text.size());
+            out.write(m.text.data(),
+                      static_cast<std::streamsize>(m.text.size()));
+            ++result.match_count;
         }
     }
 
