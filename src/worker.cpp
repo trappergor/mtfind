@@ -36,6 +36,32 @@ void write_u64(std::ostream& os, std::uint64_t v) {
     os.write(buf, sizeof(buf));
 }
 
+/**
+ * @brief RAII-хранитель, удаляющий файл при разрушении.
+ */
+class TempFileGuard {
+public:
+    explicit TempFileGuard(std::filesystem::path p)
+        : path_(std::move(p)) {}
+
+    ~TempFileGuard() {
+        if (!dismissed_) {
+            std::error_code ec;
+            std::filesystem::remove(path_, ec);
+        }
+    }
+
+    TempFileGuard(const TempFileGuard&) = delete;
+    TempFileGuard& operator=(const TempFileGuard&) = delete;
+
+    /// Отключает удаление — файл остаётся на диске.
+    void dismiss() noexcept { dismissed_ = true; }
+
+private:
+    std::filesystem::path path_;
+    bool dismissed_ = false;
+};
+
 } // namespace
 
 std::filesystem::path make_temp_path(const std::filesystem::path& dir) {
@@ -67,6 +93,8 @@ WorkerResult run_worker(const std::string& filename,
                                  + result.temp_path.string());
     }
 
+    TempFileGuard guard(result.temp_path);
+
     std::ifstream in(filename, std::ios::binary);
     if (!in) {
         throw std::runtime_error("cannot open file: " + filename);
@@ -97,6 +125,7 @@ WorkerResult run_worker(const std::string& filename,
     }
 
     result.line_count = relative_line;
+    guard.dismiss();
     return result;
 }
 
